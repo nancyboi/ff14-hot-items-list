@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+
+# Generated data - large and reproducible via `npm run build:sourcing` / `npm run generate`
+data/*.json
+!data/.gitkeep
