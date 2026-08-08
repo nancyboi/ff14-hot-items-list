@@ -6,6 +6,8 @@ export interface SourcingInfo {
   craftable: boolean;
   /** Crafting job names involved, if craftable via any recipe (e.g. "Cooking", "Alchemy"). */
   craftJobs: string[];
+  /** Gathering job(s) that can pull this item directly (e.g. "Miner", "Botanist"); empty if not gatherable. */
+  gatherJobs: string[];
   /**
    * 0 = gatherable directly and/or vendor-bought (no crafting needed)
    * 1 = craftable from only gatherable/vendor ingredients (one step)

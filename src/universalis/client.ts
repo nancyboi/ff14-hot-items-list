@@ -51,7 +51,7 @@ export async function getMostRecentlyUpdatedItemIds(
   return items.map((entry) => entry.itemID);
 }
 
-const FIELDS = [
+const FIELD_NAMES = [
   "itemID",
   "lastUploadTime",
   "currentAveragePrice",
@@ -66,7 +66,14 @@ const FIELDS = [
   "listings.pricePerUnit",
   "listings.hq",
   "listings.worldName",
-].join(",");
+];
+
+// Universalis namespaces multi-item batch responses under `items`, and the
+// `fields` filter must mirror that with an `items.` prefix - omitting it
+// silently returns `{}` for every batch. Single-item requests return an
+// unwrapped object and must NOT have the prefix.
+const FIELDS = FIELD_NAMES.join(",");
+const FIELDS_BATCH = FIELD_NAMES.map((f) => `items.${f}`).join(",");
 
 /**
  * Fetches market stats for a batch of item IDs on a single world. Handles
@@ -78,7 +85,8 @@ async function getMarketDataBatch(
   itemIds: number[],
 ): Promise<UniversalisItemMarketView[]> {
   if (itemIds.length === 0) return [];
-  const url = `${BASE_URL}/${encodeURIComponent(world)}/${itemIds.join(",")}?fields=${encodeURIComponent(FIELDS)}`;
+  const fields = itemIds.length === 1 ? FIELDS : FIELDS_BATCH;
+  const url = `${BASE_URL}/${encodeURIComponent(world)}/${itemIds.join(",")}?fields=${encodeURIComponent(fields)}`;
   const data = await getJson<
     UniversalisItemMarketView | { items: Record<string, UniversalisItemMarketView> }
   >(url);

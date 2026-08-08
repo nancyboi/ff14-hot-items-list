@@ -5,10 +5,10 @@
   "type": "module",
   "description": "Finds FFXIV market board items with unusually high recent sale volume and price on a given world, and ranks them by how easy they are to source (gather/vendor vs. multi-step crafting).",
   "scripts": {
-    "build:sourcing": "tsx src/sourcing/buildDataset.ts",
-    "generate": "tsx src/generate.ts",
+    "build:sourcing": "node node_modules/tsx/dist/cli.mjs src/sourcing/buildDataset.ts",
+    "generate": "node node_modules/tsx/dist/cli.mjs src/generate.ts",
     "serve": "node scripts/serve.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "node node_modules/typescript/bin/tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1"

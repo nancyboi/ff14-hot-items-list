@@ -1,7 +1,7 @@
 // Pulls current market data for a world from Universalis, scores items for
-// "hotness" (elevated price + high relative sale velocity), joins in the
-// static gather/craft sourcing dataset, and writes data/hot-items.json for
-// the dashboard to read.
+// "hotness" (pure sale volume - price is not a factor), joins in the static
+// gather/craft sourcing dataset, and writes data/hot-items.json for the
+// dashboard to read.
 //
 // Usage:
 //   npm run generate -- --world=Siren
@@ -31,25 +31,52 @@ export interface HotListEntry {
   vendor: boolean;
   craftable: boolean;
   craftJobs: string[];
+  gatherJobs: string[];
   effortTier: number | null;
   blurb?: string;
 }
+
+export type SourceFilter = "mining" | "botany" | "fishing" | "vendor" | "crafted" | "drop";
+
+const SOURCE_FILTERS: Record<SourceFilter, (info: SourcingDataset[number] | undefined) => boolean> = {
+  mining: (info) => Boolean(info?.gatherJobs.includes("Miner")),
+  botany: (info) => Boolean(info?.gatherJobs.includes("Botanist")),
+  fishing: (info) => Boolean(info?.gatherJobs.includes("Fisher")),
+  vendor: (info) => Boolean(info?.vendor),
+  crafted: (info) => Boolean(info?.craftable),
+  // Not gatherable/vendor/craftable by any tracked source - most likely a monster drop,
+  // quest reward, or other source this dataset doesn't have data for (see SourcingInfo.effortTier).
+  drop: (info) => Boolean(info && !info.gatherable && !info.vendor && !info.craftable),
+};
 
 interface Args {
   world: string;
   limit: number;
   candidates: number;
   aiBlurbs: boolean;
+  /** Restrict results to items sourced this way (e.g. "mining"); null disables the filter. */
+  source: SourceFilter | null;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { world: "Siren", limit: 25, candidates: 200, aiBlurbs: false };
+  const args: Args = { world: "Siren", limit: 25, candidates: 200, aiBlurbs: false, source: null };
   for (const raw of argv) {
     const [key, value] = raw.replace(/^--/, "").split("=");
     if (key === "world" && value) args.world = value;
     else if (key === "limit" && value) args.limit = Number(value);
     else if (key === "candidates" && value) args.candidates = Number(value);
     else if (key === "ai-blurbs") args.aiBlurbs = true;
+    else if (key === "source") {
+      if (!value || value.toLowerCase() === "all") {
+        args.source = null;
+      } else if (value.toLowerCase() in SOURCE_FILTERS) {
+        args.source = value.toLowerCase() as SourceFilter;
+      } else {
+        throw new Error(
+          `Unknown --source value "${value}". Expected one of: ${Object.keys(SOURCE_FILTERS).join(", ")}, all`,
+        );
+      }
+    }
   }
   return args;
 }
@@ -78,11 +105,20 @@ async function main() {
 
   const scoringOptions: ScoringOptions = {};
   const scored = scoreItems([...marketData.values()], scoringOptions);
-  console.log(`${scored.length} items passed the hot-score filters.`);
+  console.log(`${scored.length} items are selling at all (ranked by sale volume).`);
 
   const sourcing = await loadSourcingDataset();
 
-  const entries: HotListEntry[] = scored.slice(0, args.limit).map((s) => {
+  // Filter before slicing to `limit` - otherwise a source filter could zero out an
+  // already-truncated top-N instead of digging further into the scored list.
+  let filteredScored = scored;
+  if (args.source) {
+    const matches = SOURCE_FILTERS[args.source];
+    filteredScored = scored.filter((s) => matches(sourcing[s.itemId]));
+    console.log(`${filteredScored.length} of those are sourced via ${args.source}.`);
+  }
+
+  const entries: HotListEntry[] = filteredScored.slice(0, args.limit).map((s) => {
     const info = sourcing[s.itemId];
     return {
       itemId: s.itemId,
@@ -97,6 +133,7 @@ async function main() {
       vendor: info?.vendor ?? false,
       craftable: info?.craftable ?? false,
       craftJobs: info?.craftJobs ?? [],
+      gatherJobs: info?.gatherJobs ?? [],
       effortTier: info?.effortTier ?? null,
     };
   });

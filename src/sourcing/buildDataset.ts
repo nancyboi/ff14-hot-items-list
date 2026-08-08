@@ -87,17 +87,39 @@ function computeEffortTier(
   return bestCraftTier;
 }
 
+// GatheringType.csv row # -> the DoL job that uses that node type. Mining/Quarrying nodes
+// are both worked with a pickaxe (Miner); Logging/Harvesting are both Botanist. Fishing is a
+// separate system entirely (FishParameter/SpearfishingItem), handled below.
+const GATHER_JOB_BY_TYPE: Record<number, string> = {
+  0: "Miner", // Mining
+  1: "Miner", // Quarrying
+  2: "Botanist", // Logging
+  3: "Botanist", // Harvesting
+};
+
 async function main() {
   console.log("Fetching FFXIV datamining CSVs...");
-  const [itemRows, gatheringRows, vendorRows, recipeRows, craftTypeRows] = await Promise.all([
+  const [
+    itemRows,
+    gatheringRows,
+    vendorRows,
+    recipeRows,
+    craftTypeRows,
+    gatheringPointBaseRows,
+    fishParameterRows,
+    spearfishingItemRows,
+  ] = await Promise.all([
     fetchRecords("Item"),
     fetchRecords("GatheringItem"),
     fetchRecords("GilShopItem"),
     fetchRecords("Recipe"),
     fetchRecords("CraftType"),
+    fetchRecords("GatheringPointBase"),
+    fetchRecords("FishParameter"),
+    fetchRecords("SpearfishingItem"),
   ]);
   console.log(
-    `Loaded Item(${itemRows.length}) GatheringItem(${gatheringRows.length}) GilShopItem(${vendorRows.length}) Recipe(${recipeRows.length}) CraftType(${craftTypeRows.length})`,
+    `Loaded Item(${itemRows.length}) GatheringItem(${gatheringRows.length}) GilShopItem(${vendorRows.length}) Recipe(${recipeRows.length}) CraftType(${craftTypeRows.length}) GatheringPointBase(${gatheringPointBaseRows.length}) FishParameter(${fishParameterRows.length}) SpearfishingItem(${spearfishingItemRows.length})`,
   );
 
   const itemNames = new Map<number, string>();
@@ -108,9 +130,51 @@ async function main() {
   }
 
   const gatherableIds = new Set<number>();
+  // GatheringItem.csv "#" is a separate ID space from the real item ID (its "Item" column) -
+  // GatheringPointBase references gathering items by that "#", so we need the reverse map to
+  // resolve gathering nodes back to real items.
+  const realItemIdByGatheringItemId = new Map<number, number>();
   for (const row of gatheringRows) {
+    const gatheringItemId = toInt(row["#"]);
     const itemId = toInt(row["Item"]);
-    if (itemId > 0) gatherableIds.add(itemId);
+    if (itemId > 0) {
+      gatherableIds.add(itemId);
+      realItemIdByGatheringItemId.set(gatheringItemId, itemId);
+    }
+  }
+
+  const gatherJobsByItem = new Map<number, Set<string>>();
+  const gatheringItemColumns = Array.from({ length: 8 }, (_, i) => `Item[${i}]`);
+  for (const row of gatheringPointBaseRows) {
+    const job = GATHER_JOB_BY_TYPE[toInt(row["GatheringType"])];
+    if (!job) continue;
+    for (const col of gatheringItemColumns) {
+      const gatheringItemId = toInt(row[col]);
+      if (gatheringItemId <= 0) continue;
+      const realItemId = realItemIdByGatheringItemId.get(gatheringItemId);
+      if (!realItemId) continue;
+      const jobs = gatherJobsByItem.get(realItemId) ?? new Set<string>();
+      jobs.add(job);
+      gatherJobsByItem.set(realItemId, jobs);
+    }
+  }
+
+  // Fishing (rod) and spearfishing both give Item directly, no indirection needed.
+  for (const row of fishParameterRows) {
+    const itemId = toInt(row["Item"]);
+    if (itemId <= 0) continue;
+    gatherableIds.add(itemId);
+    const jobs = gatherJobsByItem.get(itemId) ?? new Set<string>();
+    jobs.add("Fisher");
+    gatherJobsByItem.set(itemId, jobs);
+  }
+  for (const row of spearfishingItemRows) {
+    const itemId = toInt(row["Item"]);
+    if (itemId <= 0) continue;
+    gatherableIds.add(itemId);
+    const jobs = gatherJobsByItem.get(itemId) ?? new Set<string>();
+    jobs.add("Fisher");
+    gatherJobsByItem.set(itemId, jobs);
   }
 
   const vendorIds = new Set<number>();
@@ -152,6 +216,7 @@ async function main() {
       vendor: vendorIds.has(itemId),
       craftable: Boolean(recipes && recipes.length > 0),
       craftJobs,
+      gatherJobs: [...(gatherJobsByItem.get(itemId) ?? [])],
       effortTier: computeEffortTier(itemId, recipesByResult, gatherableIds, vendorIds, memo, new Set()),
     };
     dataset[itemId] = info;

@@ -12,7 +12,7 @@ function effortBadge(tier) {
 
 function sourceSummary(item) {
   const parts = [];
-  if (item.gatherable) parts.push("gatherable");
+  if (item.gatherable) parts.push(item.gatherJobs?.length ? `gather: ${item.gatherJobs.join(", ")}` : "gatherable");
   if (item.vendor) parts.push("vendor-bought");
   if (item.craftable) parts.push(`craft: ${item.craftJobs.join(", ") || "unknown job"}`);
   if (parts.length === 0) return "source unknown (possibly a drop)";
@@ -22,14 +22,12 @@ function sourceSummary(item) {
 function renderRow(item) {
   const tr = document.createElement("tr");
   const badge = effortBadge(item.effortTier);
-  const priceUpPct = Math.round((item.priceRatio - 1) * 100);
 
   tr.innerHTML = `
     <td class="name">${item.name}</td>
+    <td class="velocity">${item.regularSaleVelocity.toFixed(1)}/day</td>
     <td>${numberFmt.format(Math.round(item.currentAveragePrice))} gil</td>
     <td>${numberFmt.format(Math.round(item.averagePrice))} gil</td>
-    <td class="ratio-up">+${priceUpPct}%</td>
-    <td>${item.regularSaleVelocity.toFixed(1)}</td>
     <td><span class="badge ${badge.className}">${badge.label}</span></td>
     <td class="note">${item.blurb ?? sourceSummary(item)}</td>
   `;
