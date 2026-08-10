@@ -9,7 +9,7 @@
 import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parseCsv, toRecords } from "./csv.js";
-import type { SourcingDataset, SourcingInfo } from "./types.js";
+import type { RecipeInfo, SourcingDataset, SourcingInfo } from "./types.js";
 
 const RAW_BASE = "https://raw.githubusercontent.com/xivapi/ffxiv-datamining/master/csv/en";
 const OUTPUT_PATH = fileURLToPath(new URL("../../data/item-sourcing.json", import.meta.url));
@@ -27,12 +27,39 @@ async function fetchRecords(csvName: string): Promise<Record<string, string>[]> 
 interface Recipe {
   craftType: number;
   ingredients: number[];
+  level: number;
 }
 
 function toInt(value: string | undefined): number {
   const n = Number.parseInt(value ?? "", 10);
   return Number.isFinite(n) ? n : 0;
 }
+
+/** Reads a column that must exist and be non-empty for at least some rows; throws with the
+ *  actual header if the column name is wrong, instead of silently defaulting to 0 everywhere. */
+function requireColumn(rows: Record<string, string>[], csvName: string, column: string): void {
+  const firstRow = rows[0];
+  if (!firstRow) return;
+  if (!(column in firstRow)) {
+    throw new Error(
+      `Expected column "${column}" in ${csvName}.csv but it wasn't found. Actual header: ${Object.keys(firstRow).join(", ")}`,
+    );
+  }
+}
+
+// CraftType.csv "Name" is the crafting discipline (e.g. "Clothcraft", "Cooking"), not the job
+// name players use (e.g. "Weaver", "Culinarian"). Map to job names so this lines up with
+// gatherJobs and with how PLAYER_LEVELS is keyed.
+const CRAFT_JOB_BY_TYPE_NAME: Record<string, string> = {
+  Woodworking: "Carpenter",
+  Smithing: "Blacksmith",
+  Armorcraft: "Armorer",
+  Goldsmithing: "Goldsmith",
+  Leatherworking: "Leatherworker",
+  Clothcraft: "Weaver",
+  Alchemy: "Alchemist",
+  Cooking: "Culinarian",
+};
 
 function computeEffortTier(
   itemId: number,
@@ -104,8 +131,10 @@ async function main() {
     gatheringRows,
     vendorRows,
     recipeRows,
+    recipeLevelTableRows,
     craftTypeRows,
     gatheringPointBaseRows,
+    gatheringItemLevelRows,
     fishParameterRows,
     spearfishingItemRows,
   ] = await Promise.all([
@@ -113,14 +142,37 @@ async function main() {
     fetchRecords("GatheringItem"),
     fetchRecords("GilShopItem"),
     fetchRecords("Recipe"),
+    fetchRecords("RecipeLevelTable"),
     fetchRecords("CraftType"),
     fetchRecords("GatheringPointBase"),
+    fetchRecords("GatheringItemLevelConvertTable"),
     fetchRecords("FishParameter"),
     fetchRecords("SpearfishingItem"),
   ]);
   console.log(
-    `Loaded Item(${itemRows.length}) GatheringItem(${gatheringRows.length}) GilShopItem(${vendorRows.length}) Recipe(${recipeRows.length}) CraftType(${craftTypeRows.length}) GatheringPointBase(${gatheringPointBaseRows.length}) FishParameter(${fishParameterRows.length}) SpearfishingItem(${spearfishingItemRows.length})`,
+    `Loaded Item(${itemRows.length}) GatheringItem(${gatheringRows.length}) GilShopItem(${vendorRows.length}) Recipe(${recipeRows.length}) RecipeLevelTable(${recipeLevelTableRows.length}) CraftType(${craftTypeRows.length}) GatheringPointBase(${gatheringPointBaseRows.length}) GatheringItemLevelConvertTable(${gatheringItemLevelRows.length}) FishParameter(${fishParameterRows.length}) SpearfishingItem(${spearfishingItemRows.length})`,
   );
+
+  requireColumn(recipeRows, "Recipe", "RecipeLevelTable");
+  requireColumn(recipeLevelTableRows, "RecipeLevelTable", "ClassJobLevel");
+  requireColumn(gatheringRows, "GatheringItem", "GatheringItemLevel");
+  requireColumn(gatheringItemLevelRows, "GatheringItemLevelConvertTable", "GatheringItemLevel");
+  requireColumn(fishParameterRows, "FishParameter", "GatheringItemLevel");
+  requireColumn(spearfishingItemRows, "SpearfishingItem", "GatheringItemLevel");
+
+  // RecipeLevelTable.csv "#" -> ClassJobLevel (the actual required job level for that table row).
+  const classJobLevelByRecipeLevelTable = new Map<number, number>();
+  for (const row of recipeLevelTableRows) {
+    classJobLevelByRecipeLevelTable.set(toInt(row["#"]), toInt(row["ClassJobLevel"]));
+  }
+
+  // GatheringItemLevelConvertTable.csv "#" -> GatheringItemLevel (the actual required gatherer
+  // level). GatheringItem/FishParameter/SpearfishingItem's own "GatheringItemLevel" column is
+  // just a foreign key into this table, not the level itself.
+  const gatherLevelByConvertTableId = new Map<number, number>();
+  for (const row of gatheringItemLevelRows) {
+    gatherLevelByConvertTableId.set(toInt(row["#"]), toInt(row["GatheringItemLevel"]));
+  }
 
   const itemNames = new Map<number, string>();
   for (const row of itemRows) {
@@ -132,18 +184,31 @@ async function main() {
   const gatherableIds = new Set<number>();
   // GatheringItem.csv "#" is a separate ID space from the real item ID (its "Item" column) -
   // GatheringPointBase references gathering items by that "#", so we need the reverse map to
-  // resolve gathering nodes back to real items.
+  // resolve gathering nodes back to real items. GatheringItemLevel is itself a foreign key into
+  // GatheringItemLevelConvertTable, resolved via gatherLevelByConvertTableId above.
   const realItemIdByGatheringItemId = new Map<number, number>();
+  const gatherLevelByGatheringItemId = new Map<number, number>();
   for (const row of gatheringRows) {
     const gatheringItemId = toInt(row["#"]);
     const itemId = toInt(row["Item"]);
     if (itemId > 0) {
       gatherableIds.add(itemId);
       realItemIdByGatheringItemId.set(gatheringItemId, itemId);
+      const level = gatherLevelByConvertTableId.get(toInt(row["GatheringItemLevel"]));
+      if (level !== undefined) gatherLevelByGatheringItemId.set(gatheringItemId, level);
     }
   }
 
   const gatherJobsByItem = new Map<number, Set<string>>();
+  // job -> real item id -> lowest node level at which that job can gather this item.
+  const gatherLevelsByItem = new Map<number, Map<string, number>>();
+  function recordGatherLevel(itemId: number, job: string, level: number) {
+    const levels = gatherLevelsByItem.get(itemId) ?? new Map<string, number>();
+    const existing = levels.get(job);
+    if (existing === undefined || level < existing) levels.set(job, level);
+    gatherLevelsByItem.set(itemId, levels);
+  }
+
   const gatheringItemColumns = Array.from({ length: 8 }, (_, i) => `Item[${i}]`);
   for (const row of gatheringPointBaseRows) {
     const job = GATHER_JOB_BY_TYPE[toInt(row["GatheringType"])];
@@ -156,6 +221,8 @@ async function main() {
       const jobs = gatherJobsByItem.get(realItemId) ?? new Set<string>();
       jobs.add(job);
       gatherJobsByItem.set(realItemId, jobs);
+      const level = gatherLevelByGatheringItemId.get(gatheringItemId);
+      if (level !== undefined) recordGatherLevel(realItemId, job, level);
     }
   }
 
@@ -167,6 +234,8 @@ async function main() {
     const jobs = gatherJobsByItem.get(itemId) ?? new Set<string>();
     jobs.add("Fisher");
     gatherJobsByItem.set(itemId, jobs);
+    const level = gatherLevelByConvertTableId.get(toInt(row["GatheringItemLevel"]));
+    if (level !== undefined) recordGatherLevel(itemId, "Fisher", level);
   }
   for (const row of spearfishingItemRows) {
     const itemId = toInt(row["Item"]);
@@ -175,6 +244,8 @@ async function main() {
     const jobs = gatherJobsByItem.get(itemId) ?? new Set<string>();
     jobs.add("Fisher");
     gatherJobsByItem.set(itemId, jobs);
+    const level = gatherLevelByConvertTableId.get(toInt(row["GatheringItemLevel"]));
+    if (level !== undefined) recordGatherLevel(itemId, "Fisher", level);
   }
 
   const vendorIds = new Set<number>();
@@ -185,7 +256,8 @@ async function main() {
 
   const craftTypeNames = new Map<number, string>();
   for (const row of craftTypeRows) {
-    craftTypeNames.set(toInt(row["#"]), row["Name"]?.trim() || `CraftType ${row["#"]}`);
+    const typeName = row["Name"]?.trim() || `CraftType ${row["#"]}`;
+    craftTypeNames.set(toInt(row["#"]), CRAFT_JOB_BY_TYPE_NAME[typeName] ?? typeName);
   }
 
   const recipesByResult = new Map<number, Recipe[]>();
@@ -194,7 +266,8 @@ async function main() {
     const resultId = toInt(row["ItemResult"]);
     if (resultId <= 0) continue;
     const ingredients = [...new Set(ingredientColumns.map((col) => toInt(row[col])).filter((id) => id > 0))];
-    const recipe: Recipe = { craftType: toInt(row["CraftType"]), ingredients };
+    const level = classJobLevelByRecipeLevelTable.get(toInt(row["RecipeLevelTable"])) ?? 0;
+    const recipe: Recipe = { craftType: toInt(row["CraftType"]), ingredients, level };
     const list = recipesByResult.get(resultId) ?? [];
     list.push(recipe);
     recipesByResult.set(resultId, list);
@@ -209,6 +282,12 @@ async function main() {
     const craftJobs = recipes
       ? [...new Set(recipes.map((r) => craftTypeNames.get(r.craftType) ?? `CraftType ${r.craftType}`))]
       : [];
+    const recipeInfos: RecipeInfo[] = (recipes ?? []).map((r) => ({
+      craftJob: craftTypeNames.get(r.craftType) ?? `CraftType ${r.craftType}`,
+      level: r.level,
+      ingredients: r.ingredients,
+    }));
+    const gatherLevels = Object.fromEntries(gatherLevelsByItem.get(itemId) ?? []);
     const info: SourcingInfo = {
       itemId,
       name,
@@ -217,6 +296,8 @@ async function main() {
       craftable: Boolean(recipes && recipes.length > 0),
       craftJobs,
       gatherJobs: [...(gatherJobsByItem.get(itemId) ?? [])],
+      gatherLevels,
+      recipes: recipeInfos,
       effortTier: computeEffortTier(itemId, recipesByResult, gatherableIds, vendorIds, memo, new Set()),
     };
     dataset[itemId] = info;

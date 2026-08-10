@@ -1,6 +1,7 @@
 import type {
   MostRecentlyUpdatedEntry,
   UniversalisItemMarketView,
+  UniversalisSalesHistory,
 } from "./types.js";
 
 const BASE_URL = "https://universalis.app/api/v2";
@@ -23,12 +24,21 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 500;
+
 async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Universalis request failed (${res.status} ${res.statusText}): ${url}`);
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url);
+    if (res.ok) {
+      return (await res.json()) as T;
+    }
+    if (!RETRYABLE_STATUSES.has(res.status) || attempt >= MAX_RETRIES) {
+      throw new Error(`Universalis request failed (${res.status} ${res.statusText}): ${url}`);
+    }
+    await sleep(RETRY_BASE_DELAY_MS * 2 ** attempt);
   }
-  return (await res.json()) as T;
 }
 
 /** All marketable item IDs, tradeable on the market board. */
@@ -114,6 +124,47 @@ export async function getMarketData(
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i]!;
     const views = await getMarketDataBatch(world, batch);
+    for (const view of views) {
+      results.set(view.itemID, view);
+    }
+    options.onProgress?.(results.size, itemIds.length);
+    if (i < batches.length - 1) {
+      await sleep(DELAY_BETWEEN_BATCHES_MS);
+    }
+  }
+
+  return results;
+}
+
+// Universalis's own storage retention for raw sale entries is a lot shorter than most of our
+// "past month" style windows, so ask for as many as it'll give us and let the caller filter by
+// timestamp for whatever window it actually wants (see computeVelocityForWindow in hotScore.ts).
+const MAX_HISTORY_ENTRIES = 999;
+
+async function getSalesHistoryBatch(world: string, itemIds: number[]): Promise<UniversalisSalesHistory[]> {
+  if (itemIds.length === 0) return [];
+  const url = `${BASE_URL}/history/${encodeURIComponent(world)}/${itemIds.join(",")}?entriesToReturn=${MAX_HISTORY_ENTRIES}`;
+  const data = await getJson<UniversalisSalesHistory | { items: Record<string, UniversalisSalesHistory> }>(url);
+
+  if (itemIds.length === 1) {
+    return [data as UniversalisSalesHistory];
+  }
+  const wrapped = data as { items: Record<string, UniversalisSalesHistory> };
+  return Object.values(wrapped.items ?? {});
+}
+
+/** Fetches raw sale history for many item IDs on one world, batching and rate-limiting requests. */
+export async function getSalesHistory(
+  world: string,
+  itemIds: number[],
+  options: GetMarketDataOptions = {},
+): Promise<Map<number, UniversalisSalesHistory>> {
+  const batches = chunk(itemIds, MAX_IDS_PER_REQUEST);
+  const results = new Map<number, UniversalisSalesHistory>();
+
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i]!;
+    const views = await getSalesHistoryBatch(world, batch);
     for (const view of views) {
       results.set(view.itemID, view);
     }

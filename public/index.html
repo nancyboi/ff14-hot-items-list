@@ -13,18 +13,57 @@
   </header>
 
   <main>
+    <form id="filters" class="filters">
+      <div class="filters-row">
+        <label class="field">
+          World
+          <input type="text" id="world" name="world" value="Siren" />
+        </label>
+        <label class="field">
+          Time period
+          <select id="days" name="days">
+            <option value="1">Past day</option>
+            <option value="7" selected>Past week</option>
+            <option value="30">Past month</option>
+          </select>
+        </label>
+        <label class="field checkbox">
+          <input type="checkbox" id="myLevelsOnly" name="myLevelsOnly" checked />
+          Only show items I can acquire
+        </label>
+      </div>
+
+      <fieldset class="levels">
+        <legend>Your job levels</legend>
+        <div id="gatherLevels" class="levels-group"></div>
+        <div id="craftLevels" class="levels-group"></div>
+      </fieldset>
+
+      <fieldset class="tag-filters">
+        <legend>Tags (click to include, click again to exclude)</legend>
+        <div id="tagFiltersSource" class="tag-filters-group"></div>
+        <div id="tagFiltersGather" class="tag-filters-group"></div>
+        <div id="tagFiltersCraft" class="tag-filters-group"></div>
+        <div id="tagFiltersMisc" class="tag-filters-group"></div>
+      </fieldset>
+
+      <div class="filters-row">
+        <button type="submit" id="search">Search</button>
+        <span id="searchStatus" class="search-status"></span>
+      </div>
+    </form>
+
     <div id="empty" class="empty hidden">
-      No data yet. Run <code>npm run generate -- --world=Siren</code>, then refresh this page.
+      No data yet. Set your job levels above and click Search, or run
+      <code>npm run generate -- --world=Siren</code> from the command line.
     </div>
     <table id="table" class="hidden">
       <thead>
         <tr>
           <th>Item</th>
           <th>Sales/day</th>
-          <th>Current price</th>
           <th>Avg price</th>
-          <th>Effort</th>
-          <th>Note</th>
+          <th>Tags</th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>

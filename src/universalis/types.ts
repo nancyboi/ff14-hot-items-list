@@ -42,3 +42,20 @@ export interface MostRecentlyUpdatedEntry {
   itemID: number;
   lastUploadTime: number;
 }
+
+// Shape of one item's entry from GET /api/v2/history/{world}/{itemIds}. We compute our own
+// velocity from `entries` for a caller-chosen time window rather than trusting Universalis'
+// built-in `regularSaleVelocity` on this endpoint - see src/scoring/hotScore.ts for why (its
+// value empirically tracks how many entries were returned, not `statsWithinDays`).
+export interface UniversalisHistoryEntry {
+  pricePerUnit: number;
+  quantity: number;
+  hq: boolean;
+  timestamp: number;
+  worldName?: string;
+}
+
+export interface UniversalisSalesHistory {
+  itemID: number;
+  entries: UniversalisHistoryEntry[];
+}

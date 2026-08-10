@@ -7,7 +7,7 @@
   "scripts": {
     "build:sourcing": "node node_modules/tsx/dist/cli.mjs src/sourcing/buildDataset.ts",
     "generate": "node node_modules/tsx/dist/cli.mjs src/generate.ts",
-    "serve": "node scripts/serve.mjs",
+    "serve": "node node_modules/tsx/dist/cli.mjs src/server.ts",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit"
   },
   "dependencies": {

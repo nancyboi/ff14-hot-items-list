@@ -25,11 +25,7 @@ export async function generateBlurbs(items: HotListEntry[]): Promise<Map<number,
     averagePrice: Math.round(item.averagePrice),
     priceRatioPercent: Math.round(item.priceRatio * 100),
     salesPerDay: Math.round(item.regularSaleVelocity * 10) / 10,
-    effortTier: item.effortTier,
-    gatherable: item.gatherable,
-    vendor: item.vendor,
-    craftable: item.craftable,
-    craftJobs: item.craftJobs,
+    tags: item.tags,
   }));
 
   const message = await client.messages.create({
@@ -38,7 +34,7 @@ export async function generateBlurbs(items: HotListEntry[]): Promise<Map<number,
     messages: [
       {
         role: "user",
-        content: `You are annotating a ranked list of FFXIV market board items that are currently selling for more than usual and moving faster than usual. For each item below, write ONE short sentence (under 20 words) explaining why it looks "hot" and how easy it would be for a player to supply it, using effortTier (0 = gather/vendor, 1 = simple one-step craft, 2+ = nested/multi-step craft, null = source unknown, likely a drop).
+        content: `You are annotating a ranked list of FFXIV market board items that are currently selling for more than usual and moving faster than usual. For each item below, write ONE short sentence (under 20 words) explaining why it looks "hot" and how easy it would be for a player to supply it, using its tags (e.g. "gathered"/"crafted"/"vendor" plus specific job names like "Leatherworker" indicate who can get it; no tags likely means it's a drop or other untracked source).
 
 Respond with ONLY a JSON object mapping itemId (as a string) to the blurb string. No other text.
 
